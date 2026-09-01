@@ -1,7 +1,6 @@
 import hashlib
 import secrets
 import smtplib
-
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
@@ -12,10 +11,7 @@ from Backend.App.core.config import settings
 from Backend.App.core.database import users_collection
 
 
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto"
-)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 OTP_MINUTES = 10
 
@@ -26,14 +22,16 @@ ALLOWED_ROLES = {
 }
 
 
-# =========================================================
+# ============================================================
 # PASSWORD
-# =========================================================
+# ============================================================
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(
-        password.encode("utf-8")[:72]
-    )
+    """
+    Hash password using bcrypt.
+    Bcrypt only supports the first 72 bytes.
+    """
+    return pwd_context.hash(password.encode("utf-8")[:72])
 
 
 def verify_password(password: str, hashed: str) -> bool:
@@ -46,17 +44,13 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-# =========================================================
-# JWT
-# =========================================================
+# ============================================================
+# JWT ACCESS TOKEN
+# ============================================================
 
 def create_access_token(uid: str, role: str) -> str:
-
-    expire = (
-        datetime.now(timezone.utc)
-        + timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        )
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
 
     payload = {
@@ -72,11 +66,15 @@ def create_access_token(uid: str, role: str) -> str:
     )
 
 
-# =========================================================
-# CLEAN USER
-# =========================================================
+# ============================================================
+# CLEAN USER RESPONSE
+# ============================================================
 
 def clean_user(user: dict) -> dict:
+    """
+    Removes sensitive information such as password and OTP
+    before sending user information to the frontend.
+    """
 
     return {
         "uid": user.get("uid"),
@@ -88,84 +86,56 @@ def clean_user(user: dict) -> dict:
         "state": user.get("state", ""),
         "language": user.get("language", "English"),
 
-        "organization_name": user.get(
-            "organization_name",
-            ""
-        ),
+        # Farmer / FPO / Bulk Buyer fields
+        "organization_name": user.get("organization_name", ""),
+        "registration_number": user.get("registration_number", ""),
+        "business_type": user.get("business_type", ""),
 
-        "registration_number": user.get(
-            "registration_number",
-            ""
-        ),
-
-        "business_type": user.get(
-            "business_type",
-            ""
-        ),
-
-        "email_verified": bool(
-            user.get("email_verified", False)
+        # If there is no email, email verification is not required.
+        "email_verified": (
+            True
+            if not user.get("email")
+            else bool(user.get("email_verified", False))
         ),
     }
 
 
-# =========================================================
-# OTP HELPERS
-# =========================================================
+# ============================================================
+# OTP
+# ============================================================
 
 def generate_email_otp() -> str:
-
+    """
+    Generate a secure 6-digit OTP.
+    """
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def hash_otp(otp: str) -> str:
-
+    """
+    Store only a hash of the OTP in MongoDB.
+    """
     return hashlib.sha256(
         otp.encode("utf-8")
     ).hexdigest()
 
 
-# =========================================================
-# SEND EMAIL OTP
-# =========================================================
+def send_email_otp(email: str, otp: str) -> None:
+    """
+    Send email verification OTP.
 
-def send_email_otp(email: str, otp: str):
+    This is only called when the user actually provides
+    an email address.
+    """
 
-    smtp_host = getattr(
-        settings,
-        "SMTP_HOST",
-        ""
-    )
+    if not settings.SMTP_HOST:
+        raise RuntimeError(
+            "Email service is not configured. "
+            "Add SMTP_HOST, SMTP_PORT, SMTP_USERNAME, "
+            "SMTP_PASSWORD and SMTP_FROM to Render."
+        )
 
-    smtp_port = getattr(
-        settings,
-        "SMTP_PORT",
-        587
-    )
-
-    smtp_username = getattr(
-        settings,
-        "SMTP_USERNAME",
-        ""
-    )
-
-    smtp_password = getattr(
-        settings,
-        "SMTP_PASSWORD",
-        ""
-    )
-
-    smtp_from = getattr(
-        settings,
-        "SMTP_FROM",
-        smtp_username
-    )
-
-    if (
-        not smtp_host
-        or not smtp_username
-        or not smtp_password
-    ):
+    if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
         raise RuntimeError(
             "Email service is not configured. "
             "Add SMTP_HOST, SMTP_PORT, SMTP_USERNAME, "
@@ -174,87 +144,97 @@ def send_email_otp(email: str, otp: str):
 
     message = EmailMessage()
 
-    message["Subject"] = (
-        "KisaanLink - Email Verification OTP"
+    message["Subject"] = "KisaanLink - Email Verification OTP"
+
+    message["From"] = (
+        settings.SMTP_FROM
+        if settings.SMTP_FROM
+        else settings.SMTP_USERNAME
     )
 
-    message["From"] = smtp_from
     message["To"] = email
 
     message.set_content(
-        f"""
-Hello,
-
-Welcome to KisaanLink.
-
-Your email verification OTP is:
-
-{otp}
-
-This OTP is valid for {OTP_MINUTES} minutes.
-
-If you did not request this verification,
-please ignore this email.
-
-Regards,
-KisaanLink Team
-"""
+        "Hello,\n\n"
+        "Welcome to KisaanLink.\n\n"
+        f"Your email verification OTP is: {otp}\n\n"
+        f"This OTP is valid for {OTP_MINUTES} minutes.\n\n"
+        "If you did not request this verification, "
+        "please ignore this email.\n\n"
+        "Regards,\n"
+        "KisaanLink Team"
     )
 
     with smtplib.SMTP(
-        smtp_host,
-        int(smtp_port),
+        settings.SMTP_HOST,
+        settings.SMTP_PORT,
         timeout=20
     ) as server:
 
         server.ehlo()
+
         server.starttls()
+
         server.ehlo()
 
         server.login(
-            smtp_username,
-            smtp_password
+            settings.SMTP_USERNAME,
+            settings.SMTP_PASSWORD
         )
 
         server.send_message(message)
 
 
-# =========================================================
-# PHONE NORMALIZATION
-# =========================================================
+# ============================================================
+# PHONE NUMBER NORMALIZATION
+# ============================================================
 
 def normalize_phone(phone: str | None):
+    """
+    Accept all of these:
+
+        9876543210
+        +919876543210
+        919876543210
+
+    Store consistently as:
+
+        +919876543210
+    """
 
     if not phone:
         return None
 
-    value = str(phone).strip()
+    value = phone.strip()
+
+    if not value:
+        return None
 
     digits = "".join(
         ch for ch in value
         if ch.isdigit()
     )
 
+    # Indian 10-digit number
     if len(digits) == 10:
         return "+91" + digits
 
-    if (
-        len(digits) == 12
-        and digits.startswith("91")
-    ):
+    # Indian number entered with 91
+    if len(digits) == 12 and digits.startswith("91"):
         return "+" + digits
 
+    # Already international format
     if value.startswith("+") and len(digits) >= 10:
         return "+" + digits
 
     raise ValueError(
-        "Enter a valid 10-digit Indian mobile number."
+        "Enter a valid mobile number."
     )
 
 
-# =========================================================
+# ============================================================
 # REGISTER USER
-# =========================================================
+# ============================================================
 
 def register_user(data):
 
@@ -264,153 +244,102 @@ def register_user(data):
             "Add MONGO_URI to Render."
         )
 
-    # -----------------------------------------
-    # NAME
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # EMAIL IS OPTIONAL
+    # --------------------------------------------------------
 
-    name = data.name.strip()
+    if data.email and data.email.strip():
+        email = data.email.strip().lower()
+    else:
+        email = None
 
-    if len(name) < 2:
-        raise ValueError(
-            "Enter a valid name."
-        )
-
-    # -----------------------------------------
+    # --------------------------------------------------------
     # ROLE
-    # -----------------------------------------
+    # --------------------------------------------------------
 
-    role = data.role.strip()
+    role = (data.role or "Farmer").strip()
 
     if role not in ALLOWED_ROLES:
         raise ValueError(
-            "Invalid account type."
+            "Invalid account type. Choose Farmer, FPO or Bulk Buyer."
         )
 
-    # -----------------------------------------
+    # --------------------------------------------------------
     # PHONE
-    # -----------------------------------------
+    # --------------------------------------------------------
 
-    phone = normalize_phone(
-        data.phone
-    )
+    phone = normalize_phone(data.phone)
 
-    # -----------------------------------------
-    # EMAIL - OPTIONAL
-    # -----------------------------------------
-
-    email = None
-
-    if data.email:
-
-        email = (
-            str(data.email)
-            .strip()
-            .lower()
-        )
-
-        if "@" not in email:
-            raise ValueError(
-                "Enter a valid email address."
-            )
-
-    # -----------------------------------------
-    # AT LEAST ONE LOGIN IDENTIFIER
-    # -----------------------------------------
-
+    # At least one login identifier must exist.
     if not phone and not email:
         raise ValueError(
-            "Please provide a mobile number or email."
+            "Please provide a mobile number."
         )
 
-    # -----------------------------------------
-    # DUPLICATE CHECK
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # CHECK EXISTING ACCOUNT
+    #
+    # IMPORTANT:
+    # We DO NOT search for email=None.
+    #
+    # This prevents the MongoDB:
+    #
+    # E11000 duplicate key error
+    # email_1 dup key: { email: null }
+    # --------------------------------------------------------
 
     conditions = []
 
     if phone:
-        conditions.append(
-            {"phone": phone}
-        )
+        conditions.append({
+            "phone": phone
+        })
 
     if email:
-        conditions.append(
-            {"email": email}
-        )
+        conditions.append({
+            "email": email
+        })
 
     existing = None
 
     if conditions:
-        existing = users_collection.find_one(
-            {"$or": conditions}
-        )
+        existing = users_collection.find_one({
+            "$or": conditions
+        })
 
     if existing:
 
-        # Allow re-registration of an
-        # unverified email account.
+        # If an old unverified email account exists,
+        # remove it so registration can be attempted again.
         if (
             email
             and existing.get("email") == email
-            and not existing.get(
-                "email_verified",
-                False
-            )
+            and not existing.get("email_verified", False)
         ):
-
-            users_collection.delete_one(
-                {
-                    "uid": existing.get("uid")
-                }
-            )
+            users_collection.delete_one({
+                "uid": existing.get("uid")
+            })
 
         else:
-
             raise ValueError(
-                "An account with this mobile number "
-                "or email already exists."
+                "An account with this mobile number or email already exists."
             )
 
-    # -----------------------------------------
-    # EMAIL VERIFICATION STATUS
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # BASIC USER DATA
+    # --------------------------------------------------------
 
-    email_verified = False
-
-    otp = None
     now = datetime.now(timezone.utc)
-
-    if email:
-
-        # Email supplied:
-        # verification required.
-
-        otp = generate_email_otp()
-        email_verified = False
-
-    else:
-
-        # No email:
-        # no email verification required.
-
-        email_verified = True
-
-    # -----------------------------------------
-    # USER DOCUMENT
-    # -----------------------------------------
 
     user = {
         "uid": data.uid,
 
-        "name": name,
+        "name": data.name.strip(),
 
+        # Phone is normally the primary login method.
         "phone": phone,
 
-        "email": email,
-
-        "password": hash_password(
-            data.password
-        ),
+        "password": hash_password(data.password),
 
         "role": role,
 
@@ -428,85 +357,87 @@ def register_user(data):
             else "Andhra Pradesh"
         ),
 
-        "language": data.language,
-
-        "organization_name": (
-            data.organization_name.strip()
-            if getattr(
-                data,
-                "organization_name",
-                None
-            )
-            else ""
+        "language": (
+            data.language
+            if data.language
+            else "English"
         ),
+
+        # FPO / Bulk Buyer fields.
+        "organization_name": (
+            getattr(data, "organization_name", "") or ""
+        ).strip(),
 
         "registration_number": (
-            data.registration_number.strip()
-            if getattr(
-                data,
-                "registration_number",
-                None
-            )
-            else ""
-        ),
+            getattr(data, "registration_number", "") or ""
+        ).strip(),
 
         "business_type": (
-            data.business_type.strip()
-            if getattr(
-                data,
-                "business_type",
-                None
-            )
-            else ""
-        ),
-
-        "email_verified": email_verified,
+            getattr(data, "business_type", "") or ""
+        ).strip(),
 
         "created_at": now,
     }
 
-    # -----------------------------------------
-    # ADD OTP ONLY WHEN EMAIL EXISTS
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # EMAIL OPTIONAL LOGIC
+    # --------------------------------------------------------
 
-    if email and otp:
+    if email:
 
-        user["email_otp_hash"] = hash_otp(
-            otp
-        )
+        # Email was provided.
+        # OTP verification is required.
+
+        otp = generate_email_otp()
+
+        user["email"] = email
+
+        user["email_verified"] = False
+
+        user["email_otp_hash"] = hash_otp(otp)
 
         user["email_otp_expires_at"] = (
-            now
-            + timedelta(
-                minutes=OTP_MINUTES
-            )
+            now + timedelta(minutes=OTP_MINUTES)
         )
 
-        # Send email BEFORE saving user.
+        # Send OTP BEFORE inserting the account.
+        #
+        # If SMTP fails, registration fails instead of creating
+        # an unusable unverified account.
         send_email_otp(
             email,
             otp
         )
 
-    # -----------------------------------------
-    # SAVE USER
-    # -----------------------------------------
+    else:
 
-    users_collection.insert_one(
-        user
-    )
+        # ----------------------------------------------------
+        # NO EMAIL
+        #
+        # Do NOT store:
+        #
+        # "email": None
+        #
+        # This is important because the old MongoDB unique
+        # email index was rejecting multiple null values.
+        # ----------------------------------------------------
+
+        user["email_verified"] = True
+
+    # --------------------------------------------------------
+    # INSERT USER
+    # --------------------------------------------------------
+
+    users_collection.insert_one(user)
 
     return user
 
 
-# =========================================================
+# ============================================================
 # VERIFY EMAIL OTP
-# =========================================================
+# ============================================================
 
-def verify_email_otp(
-    email: str,
-    otp: str
-):
+def verify_email_otp(email: str, otp: str):
 
     if users_collection is None:
         raise RuntimeError(
@@ -515,30 +446,23 @@ def verify_email_otp(
 
     if not email:
         raise ValueError(
-            "No email address was provided."
+            "Email address is required for email verification."
         )
 
-    email = (
-        str(email)
-        .strip()
-        .lower()
-    )
+    email = email.strip().lower()
 
-    user = users_collection.find_one(
-        {
-            "email": email
-        }
-    )
+    otp = otp.strip()
+
+    user = users_collection.find_one({
+        "email": email
+    })
 
     if not user:
         raise ValueError(
             "No registration found for this email."
         )
 
-    if user.get(
-        "email_verified",
-        False
-    ):
+    if user.get("email_verified"):
         return user
 
     expires_at = user.get(
@@ -556,19 +480,14 @@ def verify_email_otp(
             tzinfo=timezone.utc
         )
 
-    if datetime.now(
-        timezone.utc
-    ) > expires_at:
-
+    if datetime.now(timezone.utc) > expires_at:
         raise ValueError(
-            "OTP has expired. "
-            "Please request a new OTP."
+            "OTP has expired. Please request a new OTP."
         )
 
     if hash_otp(otp) != user.get(
         "email_otp_hash"
     ):
-
         raise ValueError(
             "Invalid OTP."
         )
@@ -581,24 +500,21 @@ def verify_email_otp(
             "$set": {
                 "email_verified": True
             },
-
             "$unset": {
                 "email_otp_hash": "",
-                "email_otp_expires_at": "",
-            },
+                "email_otp_expires_at": ""
+            }
         }
     )
 
-    return users_collection.find_one(
-        {
-            "uid": user["uid"]
-        }
-    )
+    return users_collection.find_one({
+        "uid": user["uid"]
+    })
 
 
-# =========================================================
+# ============================================================
 # RESEND EMAIL OTP
-# =========================================================
+# ============================================================
 
 def resend_email_otp(email: str):
 
@@ -609,75 +525,72 @@ def resend_email_otp(email: str):
 
     if not email:
         raise ValueError(
-            "No email address was provided."
+            "Email address is required."
         )
 
-    email = (
-        str(email)
-        .strip()
-        .lower()
-    )
+    email = email.strip().lower()
 
-    user = users_collection.find_one(
-        {
-            "email": email
-        }
-    )
+    user = users_collection.find_one({
+        "email": email
+    })
 
     if not user:
         raise ValueError(
             "No account found for this email."
         )
 
-    if user.get(
-        "email_verified",
-        False
-    ):
+    if user.get("email_verified"):
         raise ValueError(
             "This email is already verified."
         )
 
     otp = generate_email_otp()
 
-    now = datetime.now(
-        timezone.utc
-    )
+    now = datetime.now(timezone.utc)
 
+    # Send first.
     send_email_otp(
         email,
         otp
     )
 
+    # Save only the new OTP hash.
     users_collection.update_one(
         {
             "uid": user["uid"]
         },
         {
             "$set": {
-                "email_otp_hash": hash_otp(
-                    otp
-                ),
-
+                "email_otp_hash": hash_otp(otp),
                 "email_otp_expires_at": (
-                    now
-                    + timedelta(
-                        minutes=OTP_MINUTES
-                    )
-                ),
+                    now + timedelta(minutes=OTP_MINUTES)
+                )
             }
         }
     )
 
 
-# =========================================================
-# IDENTIFIER NORMALIZATION
-# =========================================================
+# ============================================================
+# LOGIN IDENTIFIER NORMALIZATION
+# ============================================================
 
-def normalize_identifier(
-    identifier: str
-):
+def normalize_identifier(identifier: str) -> str:
 
     value = identifier.strip()
+
+    if not value:
+        return value
+
+    # --------------------------------------------------------
+    # EMAIL
+    # --------------------------------------------------------
+
+    if "@" in value:
+        return value.lower()
+
+    # --------------------------------------------------------
+    # PHONE
+    # --------------------------------------------------------
 
     digits = "".join(
         ch for ch in value
@@ -688,27 +601,20 @@ def normalize_identifier(
     if len(digits) == 10:
         return "+91" + digits
 
-    # 91XXXXXXXXXX
-    if (
-        len(digits) == 12
-        and digits.startswith("91")
-    ):
+    # 91 + 10 digits
+    if len(digits) == 12 and digits.startswith("91"):
         return "+" + digits
 
-    # Already +91...
-    if (
-        value.startswith("+")
-        and digits
-    ):
+    # +91...
+    if value.startswith("+"):
         return "+" + digits
 
-    # Otherwise treat it as email
     return value
 
 
-# =========================================================
+# ============================================================
 # AUTHENTICATE USER
-# =========================================================
+# ============================================================
 
 def authenticate_user(
     identifier: str,
@@ -725,90 +631,69 @@ def authenticate_user(
         identifier
     )
 
-    # -----------------------------------------
-    # SEARCH PHONE OR EMAIL
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # FIND USER
+    # --------------------------------------------------------
 
-    if normalized.startswith("+"):
+    if "@" in normalized:
 
-        user = users_collection.find_one(
-            {
-                "phone": normalized
-            }
-        )
+        # Email login
+        user = users_collection.find_one({
+            "email": normalized.lower()
+        })
 
     else:
 
-        user = users_collection.find_one(
-            {
-                "email": normalized.lower()
-            }
-        )
+        # Mobile login
+        user = users_collection.find_one({
+            "phone": normalized
+        })
 
-    # -----------------------------------------
-    # USER NOT FOUND
-    # -----------------------------------------
+    # --------------------------------------------------------
+    # PASSWORD
+    # --------------------------------------------------------
 
     if not user:
         return None
 
-    # -----------------------------------------
-    # PASSWORD
-    # -----------------------------------------
-
     if not verify_password(
         password,
-        user.get(
-            "password",
-            ""
-        )
+        user.get("password", "")
     ):
         return None
 
-    # -----------------------------------------
+    # --------------------------------------------------------
     # EMAIL VERIFICATION
-    # -----------------------------------------
     #
-    # IMPORTANT:
-    # No email = no verification required.
+    # If email exists, it must be verified.
     #
-    # Email exists but isn't verified =
-    # login blocked.
-    #
+    # If email does NOT exist, verification is skipped.
+    # --------------------------------------------------------
 
-    email = user.get("email")
-
-    if email and not user.get(
-        "email_verified",
-        False
+    if (
+        user.get("email")
+        and not user.get("email_verified", False)
     ):
-
         raise ValueError(
-            "Please verify your email "
-            "before logging in."
+            "Please verify your email before logging in."
         )
 
     return user
 
 
-# =========================================================
+# ============================================================
 # LOGIN RESPONSE
-# =========================================================
+# ============================================================
 
 def login_response(user):
 
     return {
         "access_token": create_access_token(
             user["uid"],
-            user.get(
-                "role",
-                "Farmer"
-            )
+            user.get("role", "Farmer")
         ),
 
         "token_type": "bearer",
 
-        "user": clean_user(
-            user
-        ),
+        "user": clean_user(user),
     }
