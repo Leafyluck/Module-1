@@ -1,45 +1,88 @@
 # KisaanLink Module 1 — Full Stack
 
-A simple farmer-first FastAPI + MongoDB + HTML/CSS/JavaScript application.
+Farmer-first FastAPI + MongoDB + HTML/CSS/JavaScript application.
 
-## Theme
+## Included
+
 - Light theme by default
-- Green, gold and beige palette
+- Green, gold and beige UI
 - Crop-related icons and subtle animations
-- Responsive layout for desktop and mobile
-- Large, simple controls for farmer usability
+- Responsive farmer-friendly interface
+- Three account types: Farmer, FPO, Bulk Buyer
+- Email OTP verification during registration
+- Password login with email or mobile number
+- 24-hour JWT access-token default (`1440` minutes)
+- Role-aware profiles and dashboards
+- Farmer farm profile
+- Existing forecast API retained
 
-## Run locally
+## Account flow
 
-1. Create `.env` from `.env.example`.
-2. Put your MongoDB connection string in `MONGO_URI`.
-3. Install dependencies:
+`Register → Email OTP → Verify → Login → Role dashboard`
+
+Email is required for all three account types. Mobile number is optional.
+
+## Local setup
+
+1. Copy `.env.example` to `.env`.
+2. Add your MongoDB URI.
+3. Add Gmail SMTP credentials. Use a Google App Password.
+4. Install dependencies:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-4. Start the server from this folder:
+5. Start:
 
 ```powershell
 python -m uvicorn main:app --reload
 ```
 
-5. Open `http://127.0.0.1:8000`
-6. API documentation: `http://127.0.0.1:8000/docs`
-
-## Authentication
-
-Registration and password login return a JWT. Protected endpoints use:
-
-`Authorization: Bearer <token>`
-
-Password reset uses a development OTP returned by the API so it can be tested without Firebase SMS billing. Do not expose this development OTP flow in production.
+6. Open `http://127.0.0.1:8000`
+7. API docs: `http://127.0.0.1:8000/docs`
 
 ## Render
 
-Set the environment variables from `.env.example` in the Render service. The app binds to the `PORT` supplied by Render when launched through `main.py`; for a Render start command you can use:
+Build command:
+
+```text
+pip install -r requirements.txt
+```
+
+Start command:
 
 ```text
 python -m uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
+
+Set these Render environment variables:
+
+```text
+MONGO_URI
+JWT_SECRET
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-gmail@gmail.com
+SMTP_PASSWORD=your-google-app-password
+SMTP_FROM=your-gmail@gmail.com
+```
+
+Never commit `.env` or real SMTP credentials.
+
+## Git workflow for the team
+
+From the project folder:
+
+```powershell
+git pull origin main
+git add .
+git commit -m "Update KisaanLink Module 1"
+git push origin main
+```
+
+Render automatically redeploys after a successful push to the connected `main` branch.
+
+For simultaneous development, each developer should work on their own branch and open a pull request instead of overwriting another developer's work.
